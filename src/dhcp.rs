@@ -2,7 +2,7 @@ use std::net::Ipv4Addr;
 use macaddr::{MacAddr, MacAddr6, MacAddr8};
 use std::convert::{TryInto, TryFrom};
 use std::fmt::Debug;
-use std::ops::Deref;
+use std::ops::{Deref, Range, RangeFrom};
 use crate::error::{DhcpError, DhcpResult};
 use crate::option::{DhcpOptions, DhcpOption,
                     PARAMETER_REQUEST_LIST,
@@ -16,6 +16,7 @@ use crate::option::{DhcpOptions, DhcpOption,
 #[cfg(feature = "with_serde")]
 use serde::{Serialize, Deserialize, Deserializer, Serializer};
 use ascii::{AsciiString, AsciiChar};
+use std::collections::HashMap;
 
 pub const DHCP_COOKIE: &[u8] = &[0x63, 0x82, 0x53, 0x63];
 
@@ -26,6 +27,23 @@ pub const MESSAGE_OPERATION_BOOT_REQUEST: u8 = 1;
 pub const MESSAGE_OPERATION_BOOT_REPLY: u8 = 2;
 
 pub const HARDWARE_ADDRESS_TYPE_ETHERNET: u8 = 1;
+
+const OP: usize = 0;
+const HARDWARE_TYPE: usize = 1;
+const HOPS: usize = 3;
+const XID: Range<usize> = 4..8;
+const SECONDS: Range<usize> = 8..10;
+const FLAGS: Range<usize> = 10..12;
+const CLIENT_IP: Range<usize> = 12..16;
+const YOUR_IP: Range<usize> = 16..20;
+const SERVER_IP: Range<usize> = 20..24;
+const GATEWAY_IP: Range<usize> = 24..28;
+const CLIENT_HARDWARE_6: Range<usize> = 28..34;
+const CLIENT_HARDWARE_8: Range<usize> = 28..36;
+const SERVER_HOSTNAME: Range<usize> = 44..108;
+const FILENAME: Range<usize> = 108..236;
+const COOKIE: Range<usize> = 236..240;
+const OPTIONS: RangeFrom<usize> = 240..;
 
 fn ipv4_from_bytes(data: &[u8], error: DhcpError) -> DhcpResult<Ipv4Addr> {
     let fixed: [u8; 4] = data[0..4].try_into().map_err(|_| error)?;
@@ -394,6 +412,14 @@ impl DhcpPacket {
     pub fn message(&self) -> Option<&DhcpOption> {
         self.option(MESSAGE)
     }
+
+    pub fn into_bytes_with_server_ips(self, ips: Vec<Ipv4Addr>) -> HashMap<Ipv4Addr, Vec<u8>> {
+        let mut bytes:Vec<u8> = self.into();
+        ips.into_iter().map(|ip|{
+            bytes.splice(SERVER_IP, ip.octets());
+            (ip, bytes.clone())
+        }).collect()
+    }
 }
 
 
@@ -434,32 +460,37 @@ impl TryFrom<&[u8]> for DhcpPacket {
     type Error = DhcpError;
 
     fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        let packet_length = value.len();
+        if packet_length < OPTIONS.start {
+            return Err(DhcpError::InvalidPacketLength(packet_length as u8));
+        }
+
         Ok(DhcpPacket {
-            operation: MessageOperation::try_from(&value[0])?, // todo: validate byte length
-            hardware_type: HardwareAddressType::try_from(&value[1])?,
-            hops: value[3],
-            transaction_id: u32::from_be_bytes(value[4..8].try_into().map_err(|_| DhcpError::TransactionIdParseError)?),
-            seconds: u16::from_be_bytes(value[8..10].try_into().map_err(|_| DhcpError::SecondsParseError)?),
-            flags: Flags::try_from(&value[10..12])?,
-            client: ipv4_from_bytes(&value[12..16], DhcpError::ClientAddressParseError)?,
-            your: ipv4_from_bytes(&value[16..20], DhcpError::YourAddressParseError)?,
-            server: ipv4_from_bytes(&value[20..24], DhcpError::ServerAddressParseError)?,
-            gateway: ipv4_from_bytes(&value[24..28], DhcpError::GatewayAddressParseError)?,
+            operation: MessageOperation::try_from(&value[OP])?,
+            hardware_type: HardwareAddressType::try_from(&value[HARDWARE_TYPE])?,
+            hops: value[HOPS],
+            transaction_id: u32::from_be_bytes(value[XID].try_into().map_err(|_| DhcpError::TransactionIdParseError)?),
+            seconds: u16::from_be_bytes(value[SECONDS].try_into().map_err(|_| DhcpError::SecondsParseError)?),
+            flags: Flags::try_from(&value[FLAGS])?,
+            client: ipv4_from_bytes(&value[CLIENT_IP], DhcpError::ClientAddressParseError)?,
+            your: ipv4_from_bytes(&value[YOUR_IP], DhcpError::YourAddressParseError)?,
+            server: ipv4_from_bytes(&value[SERVER_IP], DhcpError::ServerAddressParseError)?,
+            gateway: ipv4_from_bytes(&value[GATEWAY_IP], DhcpError::GatewayAddressParseError)?,
             client_hardware: match value[2] {
                 6 => {
-                    let bytes: [u8; 6] = value[28..34].try_into().map_err(|_| DhcpError::HardwareAddressParseError)?;
+                    let bytes: [u8; 6] = value[CLIENT_HARDWARE_6].try_into().map_err(|_| DhcpError::HardwareAddressParseError)?;
                     MacAddr::from(bytes).into()
                 }
                 8 => {
-                    let bytes: [u8; 8] = value[28..36].try_into().map_err(|_| DhcpError::HardwareAddressParseError)?;
+                    let bytes: [u8; 8] = value[CLIENT_HARDWARE_8].try_into().map_err(|_| DhcpError::HardwareAddressParseError)?;
                     MacAddr::from(bytes).into()
                 }
                 _ => return Err(DhcpError::HardwareAddressParseError)
             },
-            server_hostname: value[44..108].iter().filter_map(byte_to_char).collect::<AsciiString>(),
-            filename: value[108..236].iter().filter_map(byte_to_char).collect::<AsciiString>(),
-            cookie: value[236..240].try_into()?,
-            options: DhcpOptions::from_bytes(&value[240..])?,
+            server_hostname: value[SERVER_HOSTNAME].iter().filter_map(byte_to_char).collect::<AsciiString>(),
+            filename: value[FILENAME].iter().filter_map(byte_to_char).collect::<AsciiString>(),
+            cookie: value[COOKIE].try_into()?,
+            options: DhcpOptions::from_bytes(&value[OPTIONS])?,
         })
     }
 }

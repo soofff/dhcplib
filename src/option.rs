@@ -98,6 +98,22 @@ pub const RELAY_AGENT_INFORMATION: u8 = 82;
 type DhcpOptionsVec = Vec<Option<DhcpOption>>;
 type Ipv4AddrVec = Vec<Ipv4Addr>;
 
+/// Static route
+#[derive(Debug, Clone, PartialOrd, PartialEq)]
+#[cfg_attr(feature = "with_serde", derive(Serialize, Deserialize))]
+pub struct StaticRoute {
+    pub destination: Ipv4Addr,
+    pub router: Ipv4Addr,
+}
+
+/// Ipv4 with mask
+#[derive(Debug, Clone, PartialOrd, PartialEq)]
+#[cfg_attr(feature = "with_serde", derive(Serialize, Deserialize))]
+pub struct Ipv4WithMask {
+    pub ipv4addr: Ipv4Addr,
+    pub mask: Ipv4Addr,
+}
+
 /// Relay Agent Information
 #[derive(Debug, Clone, PartialOrd, PartialEq)]
 #[cfg_attr(feature = "with_serde", derive(Serialize, Deserialize))]
@@ -164,7 +180,7 @@ impl ClientIdentifier {
 /// Preserves option
 ///
 /// Use `From<Vec<DhcpOption>>`, [`DhcpOptions::new_with_options`] or [`DhcpOptions::from_bytes`] for creation.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[cfg_attr(feature = "with_serde", derive(Serialize, Deserialize))]
 pub struct DhcpOptions {
     #[cfg_attr(feature = "with_serde", serde(serialize_with = "DhcpOptions::serialize_options", deserialize_with = "DhcpOptions::deserialize_options"))]
@@ -173,6 +189,12 @@ pub struct DhcpOptions {
 }
 
 impl DhcpOptions {
+    pub fn new() -> Self {
+        Self {
+            options: Self::new_with_options(vec![])
+        }
+    }
+
     /// Creates a new collection of [`DhcpOption`].
     pub fn new_with_options(init_options: Vec<DhcpOption>) -> DhcpOptionsVec {
         let mut options: DhcpOptionsVec = Vec::with_capacity(OPTIONS_SIZE);
@@ -318,6 +340,51 @@ impl DhcpOptions {
     pub fn iter_mut(&mut self) -> impl Iterator<Item=&mut Option<DhcpOption>> {
         self.options.iter_mut()
     }
+
+    /// Try to extract option value
+    pub fn try_ascii_option(&self, tag: u8) -> DhcpResult<AsciiString> {
+        self.option(tag).ok_or_else(|| DhcpError::OptionNotExist(tag))?.try_to_ascii()
+    }
+
+    /// Try to extract option value
+    pub fn try_ipv4_option(&self, tag: u8) -> DhcpResult<Ipv4Addr> {
+        self.option(tag).ok_or_else(|| DhcpError::OptionNotExist(tag))?.try_to_ipv4()
+    }
+
+    /// Try to extract option value
+    pub fn try_ipv4vec_option(&self, tag: u8) -> DhcpResult<Ipv4AddrVec> {
+        self.option(tag).ok_or_else(|| DhcpError::OptionNotExist(tag))?.try_to_ipv4vec()
+    }
+
+    /// Try to extract option value
+    pub fn try_u8_option(&self, tag: u8) -> DhcpResult<u8> {
+        self.option(tag).ok_or_else(|| DhcpError::OptionNotExist(tag))?.try_to_u8()
+    }
+
+    /// Try to extract option value
+    pub fn try_u16_option(&self, tag: u8) -> DhcpResult<u16> {
+        self.option(tag).ok_or_else(|| DhcpError::OptionNotExist(tag))?.try_to_u16()
+    }
+
+    /// Try to extract option value
+    pub fn try_u32_option(&self, tag: u8) -> DhcpResult<u32> {
+        self.option(tag).ok_or_else(|| DhcpError::OptionNotExist(tag))?.try_to_u32()
+    }
+
+    /// Try to extract option value
+    pub fn try_vec_u8_option(&self, tag: u8) -> DhcpResult<Vec<u8>> {
+        self.option(tag).ok_or_else(|| DhcpError::OptionNotExist(tag))?.try_to_vec_u8()
+    }
+
+    /// Try to extract option value
+    pub fn try_to_i32(&self, tag: u8) -> DhcpResult<i32> {
+        self.option(tag).ok_or_else(|| DhcpError::OptionNotExist(tag))?.try_to_i32()
+    }
+
+    /// Try to extract option value
+    pub fn try_to_bool(&self, tag: u8) -> DhcpResult<bool> {
+        self.option(tag).ok_or_else(|| DhcpError::OptionNotExist(tag))?.try_to_bool()
+    }
 }
 
 impl IntoIterator for DhcpOptions {
@@ -337,9 +404,20 @@ impl From<Vec<DhcpOption>> for DhcpOptions {
     }
 }
 
+impl From<Vec<Option<DhcpOption>>> for DhcpOptions {
+    fn from(o: Vec<Option<DhcpOption>>) -> Self {
+        Self {
+            options: Self::new_with_options(o.into_iter()
+                .filter_map(|s| s)
+                .collect()
+            )
+        }
+    }
+}
+
 impl From<Option<DhcpOptions>> for DhcpOptions {
     fn from(o: Option<DhcpOptions>) -> Self {
-        o.unwrap_or_else(|| vec![].into())
+        o.unwrap_or_else(|| DhcpOptions::new())
     }
 }
 
@@ -370,7 +448,7 @@ pub enum DhcpOption {
     ExtensionPath(AsciiString),
     IpForwarding(bool),
     NonLocalSourceRouting(bool),
-    PolicyFilter(Vec<(Ipv4Addr, Ipv4Addr)>),
+    PolicyFilter(Vec<Ipv4WithMask>),
     MaximumDatagramReassemblySize(u16),
     DefaultIpTTL(u8),
     PathMtuAgingTimeout(u32),
@@ -381,7 +459,7 @@ pub enum DhcpOption {
     MaskSupplier(bool),
     PerformRouterDiscovery(bool),
     RouterSolicitationAddress(Ipv4Addr),
-    StaticRoute(Vec<(Ipv4Addr, Ipv4Addr)>),
+    StaticRoute(Vec<StaticRoute>),
     TrailerEncapsulation(bool),
     ArpCacheTimeout(u32),
     EthernetEncapsulation(bool),
@@ -428,7 +506,134 @@ pub enum DhcpOption {
     Unknown(u8, Vec<u8>),
 }
 
+
 impl DhcpOption {
+    /// Try to get value if type is known without match
+    pub fn try_to_bool(&self) -> DhcpResult<bool> {
+        Ok(match self {
+            DhcpOption::IpForwarding(v) => v,
+            DhcpOption::NonLocalSourceRouting(v) => v,
+            DhcpOption::AllSubnetsLocal(v) => v,
+            DhcpOption::MaskSupplier(v) => v,
+            DhcpOption::TrailerEncapsulation(v) => v,
+            DhcpOption::EthernetEncapsulation(v) => v,
+            DhcpOption::TcpKeepAliveGarbage(v) => v,
+            _ => return Err(DhcpError::ConversionError(self.tag()))
+        }.clone())
+    }
+
+    /// Try to get value if type is known without match
+    pub fn try_to_vec_u8(&self) -> DhcpResult<Vec<u8>> {
+        Ok(match self {
+            DhcpOption::VendorSpecific(v) => v,
+            DhcpOption::ParameterRequestList(v) => v,
+            DhcpOption::VendorClassIdentifier(v) => v,
+            _ => return Err(DhcpError::ConversionError(self.tag()))
+        }.clone())
+    }
+
+    /// Try to get value if type is known without match
+    pub fn try_to_ascii(&self) -> DhcpResult<AsciiString> {
+        Ok(match self {
+            DhcpOption::HostName(v) => v,
+            DhcpOption::MeritDumpFile(v) => v,
+            DhcpOption::DomainName(v) => v,
+            DhcpOption::RootPath(v) => v,
+            DhcpOption::ExtensionPath(v) => v,
+            DhcpOption::NetworkInformationServiceDomain(v) => v,
+            DhcpOption::Message(v) => v,
+            DhcpOption::NetworkInformationServicePlusDomain(v) => v,
+            DhcpOption::TftpServer(v) => v,
+            DhcpOption::BootFileName(v) => v,
+            _ => return Err(DhcpError::ConversionError(self.tag()))
+        }.clone())
+    }
+
+    /// Try to get value if type is known without match
+    pub fn try_to_ipv4(&self) -> DhcpResult<Ipv4Addr> {
+        Ok(match self {
+            DhcpOption::SubnetMask(v, ) => v,
+            DhcpOption::SwapServer(v, ) => v,
+            DhcpOption::BroadcastAddress(v, ) => v,
+            DhcpOption::RouterSolicitationAddress(v, ) => v,
+            DhcpOption::RequestedIpAddress(v, ) => v,
+            DhcpOption::ServerIdentifier(v, ) => v,
+            _ => return Err(DhcpError::ConversionError(self.tag()))
+        }.clone())
+    }
+
+    /// Try to get value if type is known without match
+    pub fn try_to_ipv4vec(&self) -> DhcpResult<Ipv4AddrVec> {
+        Ok(match self {
+            DhcpOption::Router(v, ) => v,
+            DhcpOption::TimeServer(v, ) => v,
+            DhcpOption::NameServer(v, ) => v,
+            DhcpOption::DomainNameServer(v, ) => v,
+            DhcpOption::LogServer(v, ) => v,
+            DhcpOption::CookieServer(v, ) => v,
+            DhcpOption::LPRServer(v, ) => v,
+            DhcpOption::ImpressServer(v, ) => v,
+            DhcpOption::ResourceLocationServer(v, ) => v,
+            DhcpOption::NetworkInformationServers(v, ) => v,
+            DhcpOption::NetworkTimeProtocolServers(v, ) => v,
+            DhcpOption::NetBiosOverTcpIpNameServer(v, ) => v,
+            DhcpOption::NetBiosOverTcpIpDatagramDistributionServer(v, ) => v,
+            DhcpOption::XWindowSystemFontServer(v, ) => v,
+            DhcpOption::XWindowSystemDisplayManager(v, ) => v,
+            DhcpOption::NetworkInformationServicePlusServer(v, ) => v,
+            DhcpOption::MobileIpHomeAgent(v, ) => v,
+            DhcpOption::SmtpServer(v, ) => v,
+            DhcpOption::Pop3Server(v, ) => v,
+            DhcpOption::NntpServer(v, ) => v,
+            DhcpOption::WwwServer(v, ) => v,
+            DhcpOption::FingerServer(v, ) => v,
+            DhcpOption::IrcServer(v, ) => v,
+            DhcpOption::StreetTalkServer(v, ) => v,
+            DhcpOption::StreetTalkDirectoryAssistanceServer(v, ) => v,
+            _ => return Err(DhcpError::ConversionError(self.tag()))
+        }.clone())
+    }
+
+    /// Try to get value if type is known without match
+    pub fn try_to_u8(&self) -> DhcpResult<u8> {
+        Ok(*match self {
+            DhcpOption::DefaultIpTTL(v, ) => v,
+            DhcpOption::TcpDefaultTTL(v, ) => v,
+            _ => return Err(DhcpError::ConversionError(self.tag()))
+        })
+    }
+
+    /// Try to get value if type is known without match
+    pub fn try_to_u16(&self) -> DhcpResult<u16> {
+        Ok(*match self {
+            DhcpOption::BootFileSize(v, ) => v,
+            DhcpOption::InterfaceMtu(v, ) => v,
+            DhcpOption::MaximumDhcpMessageSize(v, ) => v,
+            _ => return Err(DhcpError::ConversionError(self.tag()))
+        })
+    }
+
+    /// Try to get value if type is known without match
+    pub fn try_to_u32(&self) -> DhcpResult<u32> {
+        Ok(*match self {
+            DhcpOption::PathMtuAgingTimeout(v, ) => v,
+            DhcpOption::ArpCacheTimeout(v, ) => v,
+            DhcpOption::TcpKeepAliveInterval(v, ) => v,
+            DhcpOption::IpAddressLeaseTime(v, ) => v,
+            DhcpOption::RenewalTimeValue(v, ) => v,
+            DhcpOption::RebindingTimeValue(v, ) => v,
+            _ => return Err(DhcpError::ConversionError(self.tag()))
+        })
+    }
+
+    /// Try to get value if type is known without match
+    pub fn try_to_i32(&self) -> DhcpResult<i32> {
+        Ok(*match self {
+            DhcpOption::TimeOffset(v, ) => v,
+            _ => return Err(DhcpError::ConversionError(self.tag()))
+        })
+    }
+
     /// Returns the Dhcp tag
     pub fn tag(&self) -> u8 {
         match self {

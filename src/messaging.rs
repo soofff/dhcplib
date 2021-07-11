@@ -4,7 +4,10 @@ use std::net::Ipv4Addr;
 use crate::DhcpPacket;
 use crate::dhcp::{Flags, MessageOperation, HardwareAddressType, MacAddress};
 use crate::error::DhcpError;
-use crate::option::{DhcpOptions, DhcpOption, MessageType, MESSAGE_TYPE, REQUESTED_IP_ADDRESS, PARAMETER_REQUEST_LIST, CLIENT_IDENTIFIER, MAXIMUM_DHCP_MESSAGE_SIZE, ClientIdentifier, SERVER_IDENTIFIER, IP_ADDRESS_LEASE_TIME};
+use crate::option::{DhcpOptions, DhcpOption, MessageType, ClientIdentifier,
+                    MESSAGE_TYPE, REQUESTED_IP_ADDRESS, PARAMETER_REQUEST_LIST, CLIENT_IDENTIFIER,
+                    MAXIMUM_DHCP_MESSAGE_SIZE, SERVER_IDENTIFIER, IP_ADDRESS_LEASE_TIME,
+};
 
 macro_rules! packet {
     ($t:ident) => {
@@ -395,7 +398,7 @@ impl DhcpRequestPacket {
         self.packet.hardware_type = HardwareAddressType::Ethernet;
         self.packet.hops = 0;
         self.packet.seconds = 0;
-        self.packet.client = client_ip_address;
+        self.packet.your = client_ip_address;
         self.packet.filename = filename.unwrap_or_default();
         self.packet.server_hostname = server_name.unwrap_or_default();
 

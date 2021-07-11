@@ -1,7 +1,7 @@
 use std::net::Ipv4Addr;
 use std::convert::TryInto;
 use ascii::AsciiString;
-use crate::option::{NetBiosNodeType, Overload, MessageType, RelayAgentInformationSubOption};
+use crate::option::{NetBiosNodeType, Overload, MessageType, RelayAgentInformationSubOption, Ipv4WithMask, StaticRoute};
 use crate::error::{DhcpError, DhcpResult};
 
 pub const MESSAGE_TYPE_DISCOVER: u8 = 1;
@@ -55,8 +55,6 @@ impl_length!(Vec<Ipv4Addr>);
 
 impl_length!(AsciiString);
 
-impl_length!(Vec<(Ipv4Addr, Ipv4Addr)>);
-
 impl_length!(u8);
 
 impl_length!(Vec<u16>);
@@ -66,6 +64,10 @@ impl_length!(Ipv4Addr);
 impl_length!(Vec<u8>);
 
 impl_length!(u32);
+
+impl_length!(Vec<Ipv4WithMask>);
+
+impl_length!(Vec<StaticRoute>);
 
 pub(crate) trait ToOptionBytes {
     fn to_option_bytes(&self, tag: u8) -> Vec<u8>;
@@ -133,19 +135,6 @@ impl TryToOption<bool> for &[u8] {
                     _ => Err(DhcpError::OptionParseError(tag))
                 }
             })?
-    }
-}
-
-impl TryToOption<Vec<(Ipv4Addr, Ipv4Addr)>> for &[u8] {
-    fn try_from_option(&self, tag: u8) -> DhcpResult<Vec<(Ipv4Addr, Ipv4Addr)>> {
-        if self.len() % 8 == 0 {
-            Ok(self.chunks_exact(8).map(|b| {
-                (Ipv4Addr::new(b[0], b[1], b[2], b[3]),
-                 Ipv4Addr::new(b[4], b[5], b[6], b[7]))
-            }).collect())
-        } else {
-            Err(DhcpError::OptionParseError(tag))
-        }
     }
 }
 
@@ -234,6 +223,35 @@ impl TryToOption<Vec<RelayAgentInformationSubOption>> for &[u8] {
     }
 }
 
+impl TryToOption<Vec<Ipv4WithMask>> for &[u8] {
+    fn try_from_option(&self, tag: u8) -> DhcpResult<Vec<Ipv4WithMask>> {
+        if self.len() % 8 == 0 {
+            Ok(self.chunks_exact(8).map(|b| {
+                Ipv4WithMask {
+                    ipv4addr: Ipv4Addr::new(b[0], b[1], b[2], b[3]),
+                    mask: Ipv4Addr::new(b[4], b[5], b[6], b[7]),
+                }
+            }).collect())
+        } else {
+            Err(DhcpError::OptionParseError(tag))
+        }
+    }
+}
+
+impl TryToOption<Vec<StaticRoute>> for &[u8] {
+    fn try_from_option(&self, tag: u8) -> DhcpResult<Vec<StaticRoute>> {
+        if self.len() % 8 == 0 {
+            Ok(self.chunks_exact(8).map(|b| {
+                StaticRoute {
+                    destination: Ipv4Addr::new(b[0], b[1], b[2], b[3]),
+                    router: Ipv4Addr::new(b[4], b[5], b[6], b[7]),
+                }
+            }).collect())
+        } else {
+            Err(DhcpError::OptionParseError(tag))
+        }
+    }
+}
 
 impl ToOptionBytes for Ipv4Addr {
     fn to_option_bytes(&self, tag: u8) -> Vec<u8> {
@@ -320,13 +338,11 @@ impl ToOptionBytes for &Vec<(Ipv4Addr, Ipv4Addr)> {
     }
 }
 
-
 impl ToOptionBytes for &u8 {
     fn to_option_bytes(&self, tag: u8) -> Vec<u8> {
         vec![tag, 1, **self]
     }
 }
-
 
 impl ToOptionBytes for &Vec<u16> {
     fn to_option_bytes(&self, tag: u8) -> Vec<u8> {
@@ -409,6 +425,35 @@ impl ToOptionBytes for &Vec<RelayAgentInformationSubOption> {
     }
 }
 
+impl ToOptionBytes for &Vec<Ipv4WithMask> {
+    fn to_option_bytes(&self, tag: u8) -> Vec<u8> {
+        let mut data = vec![];
+
+        self.iter().for_each(|ips| {
+            data.extend_from_slice(&ips.ipv4addr.octets());
+            data.extend_from_slice(&ips.mask.octets());
+        });
+        data.insert(0, data.len() as u8);
+        data.insert(0, tag);
+
+        data
+    }
+}
+
+impl ToOptionBytes for &Vec<StaticRoute> {
+    fn to_option_bytes(&self, tag: u8) -> Vec<u8> {
+        let mut data = vec![];
+
+        self.iter().for_each(|ips| {
+            data.extend_from_slice(&ips.destination.octets());
+            data.extend_from_slice(&ips.router.octets());
+        });
+        data.insert(0, data.len() as u8);
+        data.insert(0, tag);
+
+        data
+    }
+}
 
 #[test]
 fn test_parse_ipv4() {
@@ -473,15 +518,6 @@ fn test_parse_bool() {
 }
 
 #[test]
-fn test_parse_ipv4_tuple_vec() {
-    let bytes: &[u8] = &[1, 2, 3, 4, 5, 6, 7, 8];
-    let result: Vec<(Ipv4Addr, Ipv4Addr)> = bytes.try_from_option(0).unwrap();
-    assert_eq!(vec![(Ipv4Addr::new(1, 2, 3, 4),
-                     Ipv4Addr::new(5, 6, 7, 8))],
-               result);
-}
-
-#[test]
 fn test_parse_u8_vec() {
     let bytes: &[u8] = &[1, 100, 200];
     let result: Vec<u8> = bytes.try_from_option(0).unwrap();
@@ -524,6 +560,28 @@ fn test_parse_relay_agent_information_sub_option() {
     assert_eq!(vec![RelayAgentInformationSubOption::AgentRemote(vec![1, 2, 3]),
                     RelayAgentInformationSubOption::AgentCircuit(vec![1]),
     ], result);
+}
+
+#[test]
+fn test_parse_ipv4maskvec() {
+    let bytes: &[u8] = &[1, 2, 3, 4, 5, 6, 7, 8];
+    let result: Vec<Ipv4WithMask> = bytes.try_from_option(0).unwrap();
+    assert_eq!(vec![
+        Ipv4WithMask {
+            ipv4addr: Ipv4Addr::new(1, 2, 3, 4),
+            mask: Ipv4Addr::new(5, 6, 7, 8)
+        }], result);
+}
+
+#[test]
+fn test_parse_static_route_vec() {
+    let bytes: &[u8] = &[1, 2, 3, 4, 5, 6, 7, 8];
+    let result: Vec<StaticRoute> = bytes.try_from_option(0).unwrap();
+    assert_eq!(vec![
+        StaticRoute {
+            destination: Ipv4Addr::new(1, 2, 3, 4),
+            router: Ipv4Addr::new(5, 6, 7, 8)
+        }], result);
 }
 
 #[test]
@@ -576,16 +634,6 @@ fn test_into_bytes_bool() {
 }
 
 #[test]
-fn test_into_bytes_ipv4_tuple_vec() {
-    let bytes: &[u8] = &[0 as u8, 16, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8];
-    assert_eq!(bytes, (&vec![(Ipv4Addr::new(1, 1, 2, 2),
-                              Ipv4Addr::new(3, 3, 4, 4)),
-                             (Ipv4Addr::new(5, 5, 6, 6),
-                              Ipv4Addr::new(7, 7, 8, 8))])
-        .to_option_bytes(0));
-}
-
-#[test]
 fn test_into_bytes_u8() {
     let bytes: &[u8] = &[0 as u8, 1, 5];
     assert_eq!(bytes, (&(5 as u8)).to_option_bytes(0));
@@ -631,4 +679,13 @@ fn test_into_bytes_relay_agent_information_vec() {
                     RelayAgentInformationSubOption::AgentRemote(vec![5, 6, 7])];
 
     assert_eq!(bytes, (&data).to_option_bytes(0))
+}
+
+#[test]
+fn test_into_bytes_ipv4mask() {
+    let bytes: &[u8] = &[0 as u8, 8, 1, 1, 2, 2, 3, 3, 4, 4];
+    assert_eq!(bytes, (&vec![Ipv4WithMask {
+        ipv4addr: Ipv4Addr::new(1, 1, 2, 2),
+        mask: Ipv4Addr::new(3, 3, 4, 4),
+    }]) .to_option_bytes(0));
 }

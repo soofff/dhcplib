@@ -25,6 +25,9 @@ pub enum DhcpError {
     OptionParseError(u8),
     OptionInvalidValueError(u8),
     DhcpMessagePacketError,
+    ConversionError(u8),
+    OptionNotExist(u8),
+    InvalidPacketLength(u8),
 }
 
 impl Display for DhcpError {

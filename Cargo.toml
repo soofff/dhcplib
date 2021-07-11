@@ -1,5 +1,5 @@
 [package]
-name = "dhcp"
+name = "dhcplib"
 version = "0.1.0"
 authors = ["soofff@gmail.com"]
 edition = "2018"
